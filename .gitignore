@@ -1,0 +1,9 @@
+*.tgz
+*.log
+*.json
+.DS_Store
+options.yaml
+secrets.yaml
+node_modules/
+build/
+dist/
