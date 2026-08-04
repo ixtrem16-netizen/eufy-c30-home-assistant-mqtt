@@ -3,6 +3,12 @@
 Guide communautaire fondé sur une intégration réelle validée le 29 juillet
 2026 avec une Eufy Smart Lock C30, modèle `T85D0`.
 
+La version `3.1.0-c30.8`, validée le 4 août 2026, ajoute une lecture d'état
+réellement fraîche lors de la connexion, du rafraîchissement périodique et du
+service Home Assistant `eufy_security.force_sync`. Cette validation c30.8
+était en lecture seule : aucune commande physique de verrouillage ou de
+déverrouillage n'a été envoyée pendant cet audit.
+
 ## Résultat obtenu
 
 Le verrouillage et le déverrouillage depuis Home Assistant ont été validés de
@@ -144,7 +150,9 @@ git clone https://github.com/bropat/eufy-security-client.git
 cd eufy-security-client
 git fetch origin refs/pull/797/head:pr-797
 git switch pr-797
+git checkout 1187cf64b201922b99ae360693455505bce2aa09
 npm install --ignore-scripts
+npm install --ignore-scripts --no-save copyfiles@2.4.1
 npm run build
 npm pack
 ```
@@ -166,40 +174,16 @@ Créer une copie locale de l'add-on `eufy-security-ws`, par exemple :
 /addons/local/eufy_security_ws_c30/
 ```
 
-Placer l'archive construite dans ce dossier et utiliser un `Dockerfile` de ce
-type :
+Le `Dockerfile` versionné dans ce dépôt effectue lui-même la construction
+reproductible : il récupère explicitement la tête de la PR 797, extrait le
+commit fixé dans `build.yaml`, applique le correctif, installe la dépendance de
+construction `copyfiles`, exécute la compilation puis empaquette le client.
+Il installe ensuite cette archive avec `eufy-security-ws` et supprime la copie
+imbriquée incompatible.
 
-```dockerfile
-ARG BUILD_FROM
-FROM $BUILD_FROM
-
-ARG EUFY_SECURITY_WS_VERSION
-
-WORKDIR /usr/src/app
-COPY eufy-security-client-3.8.0-c30-mqtt.tgz /tmp/eufy-security-client-3.8.0-c30-mqtt.tgz
-
-RUN \
-    set -x \
-    && apk add --no-cache \
-        jq \
-        nodejs \
-        npm \
-    && node --version \
-    && npm install --force \
-        "eufy-security-ws@${EUFY_SECURITY_WS_VERSION}" \
-    && npm install --force \
-        /tmp/eufy-security-client-3.8.0-c30-mqtt.tgz \
-    && rm -rf \
-        node_modules/eufy-security-ws/node_modules/eufy-security-client \
-    && rm -f \
-        /tmp/eufy-security-client-3.8.0-c30-mqtt.tgz
-
-COPY run.sh /
-RUN chmod a+x /run.sh
-
-WORKDIR /data
-CMD ["/run.sh"]
-```
+Il n'est donc pas nécessaire de déposer manuellement une archive `.tgz` dans
+le dossier de l'add-on. La construction nécessite toutefois un accès à GitHub
+et au registre NPM.
 
 ### Pourquoi supprimer la dépendance imbriquée
 
@@ -221,7 +205,7 @@ aucune ligne `SecurityMQTT` lors d'une commande.
 ```yaml
 name: eufy-security-ws C30 MQTT
 description: eufy-security-ws avec contrôle Security MQTT du C30
-version: 3.1.0-c30.7
+version: 3.1.0-c30.8
 slug: eufy_security_ws_c30
 url: https://github.com/bropat/hassio-eufy-security-ws
 init: false
@@ -337,6 +321,17 @@ effectués depuis l'application Eufy ou physiquement.
 la requête de lecture seule `QUERY_STATUS_IN_LOCK` (code BLE `34`). Sa réponse
 chiffrée fournit immédiatement la batterie et l'état réel, sans attendre un
 heartbeat spontané et sans actionner le mécanisme.
+
+Le service Home Assistant suivant doit provoquer la même requête fraîche :
+
+```yaml
+action: eufy_security.force_sync
+```
+
+Pour valider ce chemin, noter l'heure de l'appel puis vérifier qu'une nouvelle
+paire `SecurityMQTT lock status query published` / `SecurityMQTT queried lock
+status` apparaît après cette heure. Une ancienne ligne de démarrage ne prouve
+pas que `force_sync` fonctionne.
 
 ## Procédure de validation obligatoire
 
@@ -491,7 +486,13 @@ La configuration à l'origine de ce guide a obtenu :
 - déverrouillage physique confirmé;
 - mise à jour HA par heartbeat réel;
 - redémarrage de l'add-on avec reconnexion MQTT;
+- appel `force_sync` suivi d'une nouvelle requête d'état et de sa réponse;
 - sauvegarde Home Assistant après validation.
+
+Les mouvements physiques dans les deux directions ont été confirmés le 29
+juillet 2026. La validation c30.8 du 4 août 2026 a confirmé la chaîne de
+lecture d'état sans actionner le mécanisme. Voir aussi le `CHANGELOG.md` du
+dépôt.
 
 Ce guide est destiné à faciliter les tests communautaires et la contribution
 vers une solution amont maintenable, plutôt qu'à créer un fork permanent.

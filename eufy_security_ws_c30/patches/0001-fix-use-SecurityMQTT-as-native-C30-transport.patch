@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: ixtrem16-netizen <ixtrem16@gmail.com>
+From: ixtrem16-netizen <ixtrem16-netizen@users.noreply.github.com>
 Date: Tue, 4 Aug 2026 09:12:23 -0400
 Subject: [PATCH] fix: use SecurityMQTT as native C30 transport
 
@@ -178,7 +178,21 @@ index e1e71bb..f76de1b 100644
                station.setConnectionType(this.config.p2pConnectionSetup);
                rootMainLogger.debug(`Initiate first station connection to get data over p2p`, {
                  stationSN: station.getSerial(),
-@@ -2912,15 +2974,8 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+@@ -1175,6 +1237,13 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+       const error = ensureError(err);
+       rootMainLogger.error("Error during API data refreshing", { error: getError(error) });
+     });
++    if (this.securityMqttService?.isConnected()) {
++      Object.values(this.stations)
++        .filter((station) => Device.usesSecurityMqtt(station.getDeviceType()))
++        .forEach((station) => {
++          station.getLockStatus();
++        });
++    }
+     if (this.refreshEufySecurityCloudTimeout !== undefined) clearTimeout(this.refreshEufySecurityCloudTimeout);
+     if (this.config.pollingIntervalMinutes > 0)
+       this.refreshEufySecurityCloudTimeout = setTimeout(
+@@ -2912,15 +2981,8 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
      this.securityMqttService
        .lockDevice(deviceSN, deviceModel, adminUserId, shortUserId, nickName, channel, sequence, lock)
        .then((success) => {
@@ -196,7 +210,7 @@ index e1e71bb..f76de1b 100644
          }
        })
        .catch((err) => {
-@@ -2928,6 +2983,25 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+@@ -2928,6 +2990,25 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
        });
    }
  

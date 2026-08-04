@@ -2,12 +2,14 @@
 
 [English](#english) · [Français](#français) ·
 [Full English guide](docs/GUIDE_EN.md) ·
-[Guide français complet](docs/GUIDE_FR.md)
+[Guide français complet](docs/GUIDE_FR.md) · [Changelog](CHANGELOG.md)
 
 ## English
 
 Experimental Home Assistant add-on that adds working lock/unlock control for
 the Eufy Smart Lock C30 through Eufy's Security MQTT channel.
+
+Current release: `3.1.0-c30.8` (2026-08-04).
 
 The C30 is visible through the legacy Eufy integration, but P2P control fails
 with DSK error `20028`. This add-on builds the implementation from
@@ -23,6 +25,8 @@ Validated on real C30 hardware:
 - unlock command acknowledged and physically confirmed;
 - actual state synchronized through MQTT heartbeat;
 - current state queried through Security MQTT on connection and refresh;
+- Home Assistant `force_sync` and the scheduled cloud refresh actively issue a
+  fresh Security MQTT status query instead of returning only cached state;
 - Home Assistant entity updated in both directions;
 - add-on reconnect tested after restart.
 
@@ -82,6 +86,7 @@ therefore contain neither error `20028` nor the legacy subscribe error.
 ## Documentation
 
 The complete English guide is in [docs/GUIDE_EN.md](docs/GUIDE_EN.md).
+Release history and validation scope are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Upstream and attribution
 
@@ -106,6 +111,8 @@ Module complémentaire Home Assistant expérimental ajoutant le verrouillage et
 le déverrouillage fonctionnels de la Eufy Smart Lock C30 au moyen du canal
 Security MQTT d'Eufy.
 
+Version courante : `3.1.0-c30.8` (4 août 2026).
+
 La C30 apparaît dans l'intégration Eufy historique, mais son contrôle P2P
 échoue avec l'erreur DSK `20028`. Ce module construit l'implémentation de la
 [PR 797 de `bropat/eufy-security-client`](https://github.com/bropat/eufy-security-client/pull/797),
@@ -120,6 +127,8 @@ Validation effectuée sur une vraie C30 :
 - commande de déverrouillage acquittée et confirmée physiquement;
 - état réel synchronisé par heartbeat MQTT;
 - état courant interrogé par Security MQTT à la connexion et au rafraîchissement;
+- `force_sync` et le rafraîchissement périodique Home Assistant déclenchent une
+  nouvelle requête Security MQTT au lieu de retourner uniquement l'état caché;
 - entité Home Assistant mise à jour dans les deux directions;
 - reconnexion du module testée après redémarrage.
 
@@ -164,6 +173,8 @@ stations:
 
 Le guide français complet se trouve dans
 [docs/GUIDE_FR.md](docs/GUIDE_FR.md).
+L'historique des versions et la portée des validations se trouvent dans
+[CHANGELOG.md](CHANGELOG.md).
 
 ### Avis
 

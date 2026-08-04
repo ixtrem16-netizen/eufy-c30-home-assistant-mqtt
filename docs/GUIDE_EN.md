@@ -3,6 +3,11 @@
 Community guide based on a real installation validated on July 29, 2026 with
 an Eufy Smart Lock C30, model `T85D0`.
 
+Release `3.1.0-c30.8`, validated on August 4, 2026, adds an actively queried
+state refresh on connection, periodic refresh, and the Home Assistant
+`eufy_security.force_sync` service. The c30.8 audit was read-only: it did not
+send a physical lock or unlock command.
+
 ## Validated result
 
 Lock and unlock were validated end to end:
@@ -136,6 +141,7 @@ git fetch origin refs/pull/797/head:pr-797
 git switch pr-797
 git checkout 1187cf64b201922b99ae360693455505bce2aa09
 npm install --ignore-scripts
+npm install --ignore-scripts --no-save copyfiles@2.4.1
 npm run build
 npm pack
 ```
@@ -259,6 +265,17 @@ On connection and periodic refresh, the add-on also sends the read-only
 `QUERY_STATUS_IN_LOCK` request (BLE code `34`). Its encrypted response provides
 the current battery and lock state immediately, without waiting for a
 spontaneous heartbeat and without actuating the mechanism.
+
+The following Home Assistant service must trigger the same fresh query:
+
+```yaml
+action: eufy_security.force_sync
+```
+
+To validate this path, note the call time and confirm that a new
+`SecurityMQTT lock status query published` / `SecurityMQTT queried lock status`
+pair appears after that time. A startup log entry from earlier is not proof
+that `force_sync` worked.
 
 ## Mandatory validation procedure
 
@@ -386,3 +403,7 @@ Before every update:
 
 This repository is intended to help community testing and upstream
 contribution, not to become a permanent unmaintained fork.
+
+Physical lock and unlock were confirmed on July 29, 2026. The August 4 c30.8
+validation confirmed the read-only state-query chain without actuating the
+mechanism. See the repository `CHANGELOG.md` for release-specific scope.

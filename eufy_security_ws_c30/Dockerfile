@@ -16,9 +16,11 @@ RUN \
         nodejs \
         npm \
     && git clone https://github.com/bropat/eufy-security-client.git . \
+    && git fetch origin refs/pull/797/head \
     && git checkout "${EUFY_SECURITY_CLIENT_COMMIT}" \
     && git apply /tmp/eufy-c30-patches/*.patch \
     && npm install --ignore-scripts \
+    && npm install --ignore-scripts --no-save copyfiles@2.4.1 \
     && npm run build \
     && npm pack \
     && mv eufy-security-client-*.tgz /tmp/eufy-security-client-c30-mqtt.tgz
