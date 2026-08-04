@@ -1,6 +1,6 @@
 name: eufy-security-ws C30 MQTT
 description: Experimental Security MQTT control for the Eufy Smart Lock C30
-version: 3.1.0-c30.1
+version: 3.1.0-c30.7
 slug: "eufy_security_ws_c30"
 url: https://github.com/ixtrem16-netizen/eufy-c30-home-assistant-mqtt
 init: false

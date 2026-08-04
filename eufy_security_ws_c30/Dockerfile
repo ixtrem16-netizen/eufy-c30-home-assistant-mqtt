@@ -4,6 +4,8 @@ FROM $BUILD_FROM
 ARG EUFY_SECURITY_WS_VERSION
 ARG EUFY_SECURITY_CLIENT_COMMIT
 
+COPY patches /tmp/eufy-c30-patches
+
 WORKDIR /tmp/build-client
 
 RUN \
@@ -15,6 +17,7 @@ RUN \
         npm \
     && git clone https://github.com/bropat/eufy-security-client.git . \
     && git checkout "${EUFY_SECURITY_CLIENT_COMMIT}" \
+    && git apply /tmp/eufy-c30-patches/*.patch \
     && npm install --ignore-scripts \
     && npm run build \
     && npm pack \
@@ -33,7 +36,8 @@ RUN \
     && rm -f \
         /tmp/eufy-security-client-c30-mqtt.tgz \
     && rm -rf \
-        /tmp/build-client
+        /tmp/build-client \
+        /tmp/eufy-c30-patches
 
 COPY run.sh /
 RUN chmod a+x /run.sh

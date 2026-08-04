@@ -22,6 +22,7 @@ Validated on real C30 hardware:
 - lock command acknowledged and physically confirmed;
 - unlock command acknowledged and physically confirmed;
 - actual state synchronized through MQTT heartbeat;
+- current state queried through Security MQTT on connection and refresh;
 - Home Assistant entity updated in both directions;
 - add-on reconnect tested after restart.
 
@@ -70,11 +71,13 @@ SecurityMQTT connecting to security-mqtt-us.anker.com:8883
 SecurityMQTT connected successfully
 SecurityMQTT subscribed: cmd/eufy_security/T85D0/SERIAL/res
 SecurityMQTT subscribed: cmd/eufy_security/T85D0/SERIAL/req
+SecurityMQTT lock status query published
+SecurityMQTT queried lock status
 ```
 
-Legacy P2P error `20028` may still appear during initialization. It does not
-block the MQTT path when the SecurityMQTT connection and exact subscriptions
-succeed.
+The patched C30 transport does not start the incompatible P2P/DSK path or
+register the lock on the legacy smart-lock MQTT topic. A clean startup should
+therefore contain neither error `20028` nor the legacy subscribe error.
 
 ## Documentation
 
@@ -116,6 +119,7 @@ Validation effectuée sur une vraie C30 :
 - commande de verrouillage acquittée et confirmée physiquement;
 - commande de déverrouillage acquittée et confirmée physiquement;
 - état réel synchronisé par heartbeat MQTT;
+- état courant interrogé par Security MQTT à la connexion et au rafraîchissement;
 - entité Home Assistant mise à jour dans les deux directions;
 - reconnexion du module testée après redémarrage.
 

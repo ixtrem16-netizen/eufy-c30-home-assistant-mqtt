@@ -1,0 +1,560 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ixtrem16-netizen <ixtrem16@gmail.com>
+Date: Tue, 4 Aug 2026 09:12:23 -0400
+Subject: [PATCH] fix: use SecurityMQTT as native C30 transport
+
+---
+ .../securityMqttStationConnection.test.ts     | 30 ++++++
+ src/eufysecurity.ts                           | 98 ++++++++++++++++---
+ src/http/interfaces.ts                        |  7 ++
+ src/http/station.ts                           | 29 +++++-
+ src/mqtt/ble-lock-protocol.ts                 |  7 ++
+ src/mqtt/security-mqtt.test.ts                | 86 +++++++++++++++-
+ src/mqtt/security-mqtt.ts                     | 93 +++++++++++++++++-
+ 7 files changed, 333 insertions(+), 17 deletions(-)
+ create mode 100644 src/__test__/securityMqttStationConnection.test.ts
+
+diff --git a/src/__test__/securityMqttStationConnection.test.ts b/src/__test__/securityMqttStationConnection.test.ts
+new file mode 100644
+index 0000000..7c4cecc
+--- /dev/null
++++ b/src/__test__/securityMqttStationConnection.test.ts
+@@ -0,0 +1,30 @@
++import { Station } from "../http/station";
++
++describe("Station SecurityMQTT connectivity", () => {
++  function createStation(p2pConnected: boolean): Station {
++    const station = Object.create(Station.prototype) as Station;
++    (station as any).p2pSession = {
++      isConnected: () => p2pConnected,
++    };
++    (station as any).securityMqttConnected = false;
++    return station;
++  }
++
++  it("reports a SecurityMQTT-only station as connected", () => {
++    const station = createStation(false);
++
++    expect(station.isConnected()).toBe(false);
++    station.setSecurityMqttConnected(true);
++    expect(station.isConnected()).toBe(true);
++    station.setSecurityMqttConnected(false);
++    expect(station.isConnected()).toBe(false);
++  });
++
++  it("does not hide a live P2P connection when SecurityMQTT disconnects", () => {
++    const station = createStation(true);
++
++    station.setSecurityMqttConnected(true);
++    station.setSecurityMqttConnected(false);
++    expect(station.isConnected()).toBe(true);
++  });
++});
+diff --git a/src/eufysecurity.ts b/src/eufysecurity.ts
+index e1e71bb..f76de1b 100644
+--- a/src/eufysecurity.ts
++++ b/src/eufysecurity.ts
+@@ -455,10 +455,12 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+             this.securityMqttService!.subscribeLock(device.getSerial(), device.getModel());
+           }
+         }
++        this.setSecurityMqttConnectionState(true);
+       });
+ 
+       this.securityMqttService.on("close", () => {
+         rootMainLogger.info("SecurityMQTT disconnected");
++        this.setSecurityMqttConnectionState(false);
+       });
+ 
+       this.securityMqttService.on("lock status", (deviceSN, locked, battery) => {
+@@ -489,6 +491,50 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+     }
+   }
+ 
++  /**
++   * Keep station connectivity aligned with the real transport used by C30-class locks.
++   *
++   * The websocket API exposes Station.isConnected() to integrations. For
++   * SecurityMQTT-only locks, reporting only the intentionally absent P2P
++   * session makes a working lock look offline and triggers pointless DSK
++   * reconnect attempts.
++   */
++  private setSecurityMqttConnectionState(connected: boolean): void {
++    const handledStations = new Set<string>();
++
++    for (const device of Object.values(this.devices)) {
++      if (!device.usesSecurityMqtt()) {
++        continue;
++      }
++
++      const stationSN = device.getStationSerial();
++      if (handledStations.has(stationSN)) {
++        continue;
++      }
++      handledStations.add(stationSN);
++
++      const station = this.stations[stationSN];
++      if (!station) {
++        rootMainLogger.debug("SecurityMQTT station state update skipped - station not found", {
++          stationSN,
++        });
++        continue;
++      }
++
++      const wasConnected = station.isConnected();
++      station.setSecurityMqttConnected(connected);
++      const isConnected = station.isConnected();
++
++      if (!wasConnected && isConnected) {
++        rootMainLogger.info("Station connected through SecurityMQTT", { stationSN });
++        this.onStationConnect(station);
++      } else if (wasConnected && !isConnected) {
++        rootMainLogger.info("Station disconnected from SecurityMQTT", { stationSN });
++        this.onStationClose(station);
++      }
++    }
++  }
++
+   public setLoggingLevel(category: LoggingCategories, level: LogLevel): void {
+     if (
+       typeof level === "number" &&
+@@ -550,7 +596,11 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+     if (this.stationsLoaded) await this.stationsLoaded;
+     if (Object.keys(this.stations).includes(hub.station_sn)) {
+       this.stations[hub.station_sn].update(hub);
++      const usesSecurityMqtt = Object.values(this.devices).some(
++        (device) => device.getStationSerial() === hub.station_sn && device.usesSecurityMqtt()
++      );
+       if (
++        !usesSecurityMqtt &&
+         !this.stations[hub.station_sn].isConnected() &&
+         !this.stations[hub.station_sn].isEnergySavingDevice() &&
+         this.stations[hub.station_sn].isP2PConnectableDevice()
+@@ -572,9 +622,14 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+       this.devices[serial] = device;
+       this.emit("device added", device);
+ 
+-      if (device.isLock()) this.mqttService.subscribeLock(device.getSerial());
++      if (device.isLock() && !device.usesSecurityMqtt()) {
++        this.mqttService.subscribeLock(device.getSerial());
++      }
+       if (device.usesSecurityMqtt() && this.securityMqttService) {
+         this.securityMqttService.subscribeLock(device.getSerial(), device.getModel());
++        if (this.securityMqttService.isConnected()) {
++          this.setSecurityMqttConnectionState(true);
++        }
+       }
+     } else {
+       rootMainLogger.debug(`Device with this serial ${device.getSerial()} exists already and couldn't be added again!`);
+@@ -872,6 +927,11 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+                   _property: PropertyData
+                 ) => this.onSecurityMqttCommand(deviceSN, adminUserId, shortUserId, nickName, channel, sequence, lock)
+               );
++              station.on(
++                "security mqtt status query",
++                (_station: Station, deviceSN: string, adminUserId: string, channel: number, sequence: number) =>
++                  this.onSecurityMqttStatusQuery(deviceSN, adminUserId, channel, sequence)
++              );
+               station.on("hub notify update", (station: Station) => this.onHubNotifyUpdate(station));
+               this.addStation(station);
+               station.initialize();
+@@ -915,7 +975,9 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+       station.getCameraInfo();
+     }
+     if (Device.isLock(station.getDeviceType())) {
+-      station.getLockParameters();
++      if (!Device.usesSecurityMqtt(station.getDeviceType())) {
++        station.getLockParameters();
++      }
+       station.getLockStatus();
+     }
+     if (
+@@ -1128,7 +1190,7 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+       devices.forEach((device) => {
+         this.getStation(device.getStationSerial())
+           .then((station: Station) => {
+-            if (!station.isConnected() && station.isP2PConnectableDevice()) {
++            if (!device.usesSecurityMqtt() && !station.isConnected() && station.isP2PConnectableDevice()) {
+               station.setConnectionType(this.config.p2pConnectionSetup);
+               rootMainLogger.debug(`Initiate first station connection to get data over p2p`, {
+                 stationSN: station.getSerial(),
+@@ -2912,15 +2974,8 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+     this.securityMqttService
+       .lockDevice(deviceSN, deviceModel, adminUserId, shortUserId, nickName, channel, sequence, lock)
+       .then((success) => {
+-        if (success) {
+-          // Optimistically update lock state
+-          this.getDevice(deviceSN)
+-            .then((device) => {
+-              device.updateProperty(PropertyName.DeviceLocked, lock);
+-            })
+-            .catch(() => {
+-              /* device not found, ignore */
+-            });
++        if (!success) {
++          rootMainLogger.error("SecurityMQTT lock command was not published", { deviceSN });
+         }
+       })
+       .catch((err) => {
+@@ -2928,6 +2983,25 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
+       });
+   }
+ 
++  private onSecurityMqttStatusQuery(deviceSN: string, adminUserId: string, channel: number, sequence: number): void {
++    if (!this.securityMqttService || !this.securityMqttService.isConnected()) {
++      rootMainLogger.error("SecurityMQTT not connected, cannot query lock status", { deviceSN });
++      return;
++    }
++    const device = this.devices[deviceSN];
++    const deviceModel = device ? device.getModel() : deviceSN;
++    this.securityMqttService
++      .queryLockStatus(deviceSN, deviceModel, adminUserId, channel, sequence)
++      .then((success) => {
++        if (!success) {
++          rootMainLogger.error("SecurityMQTT lock status query was not published", { deviceSN });
++        }
++      })
++      .catch((err) => {
++        rootMainLogger.error("SecurityMQTT lock status query error", { error: getError(ensureError(err)) });
++      });
++  }
++
+   private onDeviceOpen(device: Device, state: boolean): void {
+     this.emit("device open", device, state);
+   }
+diff --git a/src/http/interfaces.ts b/src/http/interfaces.ts
+index 7f72e4a..b40dd5a 100644
+--- a/src/http/interfaces.ts
++++ b/src/http/interfaces.ts
+@@ -284,6 +284,13 @@ export interface StationEvents {
+     lock: boolean,
+     property: PropertyData
+   ) => void;
++  "security mqtt status query": (
++    station: Station,
++    deviceSN: string,
++    adminUserId: string,
++    channel: number,
++    sequence: number
++  ) => void;
+   "hub notify update": (station: Station) => void;
+ }
+ 
+diff --git a/src/http/station.ts b/src/http/station.ts
+index f7a93fc..80467b9 100644
+--- a/src/http/station.ts
++++ b/src/http/station.ts
+@@ -189,6 +189,7 @@ export class Station extends TypedEmitter<StationEvents> {
+   private currentDelay = 0;
+   private reconnectTimeout?: NodeJS.Timeout;
+   private terminating = false;
++  private securityMqttConnected = false;
+ 
+   private p2pConnectionType = P2PConnectionType.QUICKEST;
+ 
+@@ -999,11 +1000,23 @@ export class Station extends TypedEmitter<StationEvents> {
+   }
+ 
+   public isConnected(): boolean {
+-    return this.p2pSession.isConnected();
++    return this.p2pSession.isConnected() || this.securityMqttConnected;
++  }
++
++  /**
++   * Reflect the alternative SecurityMQTT transport used by Wi-Fi smart locks.
++   *
++   * These devices intentionally do not establish a P2P session. Consumers of
++   * Station.isConnected() still need an accurate transport-availability state,
++   * otherwise they report a working MQTT lock as disconnected.
++   */
++  public setSecurityMqttConnected(connected: boolean): void {
++    this.securityMqttConnected = connected;
+   }
+ 
+   public close(): void {
+     this.terminating = true;
++    this.securityMqttConnected = false;
+     if (this.reconnectTimeout) {
+       clearTimeout(this.reconnectTimeout);
+       this.reconnectTimeout = undefined;
+@@ -18028,7 +18041,19 @@ export class Station extends TypedEmitter<StationEvents> {
+ 
+   public getLockStatus(): void {
+     //TODO: Implement support for other Locks
+-    if (
++    if (Device.usesSecurityMqtt(this.getDeviceType())) {
++      rootHTTPLogger.debug(`Station smart lock query status through security MQTT`, {
++        stationSN: this.getSerial(),
++      });
++      this.emit(
++        "security mqtt status query",
++        this,
++        this.getSerial(),
++        this.rawStation.member.admin_user_id,
++        0,
++        this.p2pSession.incLockSequenceNumber()
++      );
++    } else if (
+       Device.isLockWifiT8506(this.getDeviceType()) ||
+       Device.isLockWifiT8502(this.getDeviceType()) ||
+       Device.isLockWifiT8510P(this.getDeviceType(), this.getSerial()) ||
+diff --git a/src/mqtt/ble-lock-protocol.ts b/src/mqtt/ble-lock-protocol.ts
+index 720ca6a..89c88f6 100644
+--- a/src/mqtt/ble-lock-protocol.ts
++++ b/src/mqtt/ble-lock-protocol.ts
+@@ -81,6 +81,13 @@ export class BleLockProtocol {
+     return frame.isResponse && frame.commandCode === SmartLockBleCommandFunctionType2.ON_OFF_LOCK;
+   }
+ 
++  /**
++   * Checks whether a parsed BLE frame is a query-status response.
++   */
++  static isStatusResponse(frame: BleFrame): boolean {
++    return frame.isResponse && frame.commandCode === SmartLockBleCommandFunctionType2.QUERY_STATUS_IN_LOCK;
++  }
++
+   /**
+    * Parses a heartbeat TLV payload to extract battery level and lock status.
+    *
+diff --git a/src/mqtt/security-mqtt.test.ts b/src/mqtt/security-mqtt.test.ts
+index bb2437e..e538636 100644
+--- a/src/mqtt/security-mqtt.test.ts
++++ b/src/mqtt/security-mqtt.test.ts
+@@ -1,7 +1,7 @@
+ import { SecurityMQTTService } from "./security-mqtt";
+ import { BleLockProtocol } from "./ble-lock-protocol";
+-
+-/* eslint-disable @typescript-eslint/no-explicit-any */
++import { encryptPayloadData, generateSmartLockAESKey, getLockVectorBytes } from "../p2p/utils";
++import { CommandType } from "../p2p/types";
+ 
+ function createService(): any {
+   return new SecurityMQTTService("test-auth-token", "test-user-id", "test-udid", "US");
+@@ -107,6 +107,27 @@ describe("BleLockProtocol", () => {
+     });
+   });
+ 
++  describe("isStatusResponse", () => {
++    it("returns true only for a query-status response", () => {
++      expect(
++        BleLockProtocol.isStatusResponse({
++          isEncrypted: true,
++          isResponse: true,
++          commandCode: 34,
++          data: Buffer.alloc(0),
++        })
++      ).toBe(true);
++      expect(
++        BleLockProtocol.isStatusResponse({
++          isEncrypted: true,
++          isResponse: true,
++          commandCode: 35,
++          data: Buffer.alloc(0),
++        })
++      ).toBe(false);
++    });
++  });
++
+   describe("parseHeartbeat", () => {
+     it("parses battery and locked state", () => {
+       // TLV: [0xA1, 0x01, 85, 0xA2, 0x01, 0x04] = battery=85, lockStatus=4 (locked)
+@@ -186,6 +207,67 @@ describe("SecurityMQTTService", () => {
+     });
+   });
+ 
++  describe("queryLockStatus", () => {
++    it("publishes command 34 and decodes its encrypted status response", async () => {
++      const service = createService();
++      const deviceSN = "T85D0TESTDEVICE1";
++      const adminUserId = "1234567890abcdef";
++      let publishedMessage = "";
++
++      service.connectionState = "connected";
++      service.client = {
++        publish: (_topic: string, message: string, _options: unknown, callback: (error?: Error) => void) => {
++          publishedMessage = message;
++          callback();
++        },
++      };
++
++      await expect(service.queryLockStatus(deviceSN, "T85D0", adminUserId, 0, 123)).resolves.toBe(true);
++
++      const mqttEnvelope = JSON.parse(publishedMessage);
++      const devicePayload = JSON.parse(mqttEnvelope.payload);
++      const transportPayload = JSON.parse(Buffer.from(devicePayload.trans, "base64").toString("utf8"));
++      const requestFrame = BleLockProtocol.parseBleFrame(Buffer.from(transportPayload.payload.lock_payload, "hex"));
++      expect(requestFrame?.commandCode).toBe(34);
++      expect(transportPayload.cmd).toBe(CommandType.CMD_TRANSFER_PAYLOAD);
++
++      const pending = service.pendingStatusQueries.get(deviceSN);
++      expect(pending).toBeDefined();
++      const encryptedStatus = encryptPayloadData(
++        Buffer.from([0x00, 0xa1, 0x01, 53, 0xa2, 0x01, 0x04]),
++        generateSmartLockAESKey(adminUserId, pending.commandTime),
++        Buffer.from(getLockVectorBytes(deviceSN), "hex")
++      );
++      const responseFrame = Buffer.alloc(10 + encryptedStatus.length);
++      responseFrame[0] = 0xff;
++      responseFrame[1] = 0x09;
++      responseFrame.writeUInt16BE(0x4000 | 0x0800 | 34, 7);
++      encryptedStatus.copy(responseFrame, 9);
++
++      const responseTransport = {
++        cmd: CommandType.CMD_TRANSFER_PAYLOAD,
++        payload: {
++          dev_sn: deviceSN,
++          lock_payload: responseFrame.toString("hex"),
++        },
++      };
++      const responsePayload = {
++        device_sn: deviceSN,
++        trans: Buffer.from(JSON.stringify(responseTransport)).toString("base64"),
++      };
++      const statusEvent = jest.fn();
++      service.on("lock status", statusEvent);
++
++      service.handleMessage(
++        `cmd/eufy_security/T85D0/${deviceSN}/res`,
++        Buffer.from(JSON.stringify({ payload: JSON.stringify(responsePayload) }))
++      );
++
++      expect(statusEvent).toHaveBeenCalledWith(deviceSN, true, 53);
++      expect(service.pendingStatusQueries.has(deviceSN)).toBe(false);
++    });
++  });
++
+   describe("close", () => {
+     it("does not throw when called before connect", () => {
+       const service = createService();
+diff --git a/src/mqtt/security-mqtt.ts b/src/mqtt/security-mqtt.ts
+index f213340..bc9fa85 100644
+--- a/src/mqtt/security-mqtt.ts
++++ b/src/mqtt/security-mqtt.ts
+@@ -9,7 +9,7 @@ import { rootMQTTLogger } from "../logging";
+ import { ensureError } from "../error";
+ import { getError } from "../utils";
+ import { SmartLockP2PCommandPayloadType } from "../p2p/models";
+-import { getSmartLockP2PCommand } from "../p2p/utils";
++import { decryptPayloadData, generateSmartLockAESKey, getLockVectorBytes, getSmartLockP2PCommand } from "../p2p/utils";
+ import { SmartLockCommand, SmartLockFunctionType, CommandType } from "../p2p/types";
+ import { Lock } from "../http/device";
+ 
+@@ -86,6 +86,11 @@ interface DeviceCommandPayload {
+   trans: string;
+ }
+ 
++interface PendingStatusQuery {
++  adminUserId: string;
++  commandTime: number;
++}
++
+ /**
+  * Manages BLE-over-MQTT communication with Eufy security locks.
+  *
+@@ -111,6 +116,8 @@ export class SecurityMQTTService extends TypedEmitter<SecurityMQTTServiceEvents>
+   private subscribedLocks: Set<string> = new Set();
+   /** Maps device serial number to device model for locks awaiting MQTT subscription. */
+   private pendingLockSubscriptions = new Map<string, string>();
++  /** Decryption context for the latest read-only status query per lock. */
++  private pendingStatusQueries = new Map<string, PendingStatusQuery>();
+   private msgSeq: number = 1;
+ 
+   /**
+@@ -285,6 +292,55 @@ export class SecurityMQTTService extends TypedEmitter<SecurityMQTTServiceEvents>
+     });
+   }
+ 
++  /**
++   * Requests the current battery and lock state without changing the lock.
++   */
++  public queryLockStatus(
++    deviceSN: string,
++    deviceModel: string,
++    adminUserId: string,
++    channel: number,
++    sequence: number
++  ): Promise<boolean> {
++    return new Promise((resolve) => {
++      if (!this.client || this.connectionState !== ConnectionState.CONNECTED) {
++        rootMQTTLogger.error("SecurityMQTT not connected, cannot query lock status");
++        resolve(false);
++        return;
++      }
++
++      const command = getSmartLockP2PCommand(
++        deviceSN,
++        adminUserId,
++        SmartLockCommand.QUERY_STATUS_IN_LOCK,
++        channel,
++        sequence,
++        Lock.encodeCmdSmartLockStatus(adminUserId),
++        SmartLockFunctionType.TYPE_2
++      );
++      const transPayload: SmartLockP2PCommandPayloadType = JSON.parse(command.payload.value);
++      this.pendingStatusQueries.set(deviceSN, {
++        adminUserId,
++        commandTime: transPayload.payload.time,
++      });
++
++      const message = this.buildCommandMessage(deviceSN, transPayload);
++      const topic = this.getMqttTopic(deviceModel, deviceSN, "req");
++      rootMQTTLogger.debug("SecurityMQTT publishing lock status query", { topic, deviceSN });
++
++      this.client.publish(topic, JSON.stringify(message), { qos: 1 }, (err) => {
++        if (err) {
++          this.pendingStatusQueries.delete(deviceSN);
++          rootMQTTLogger.error("SecurityMQTT status query publish failed", { error: getError(err) });
++          resolve(false);
++        } else {
++          rootMQTTLogger.info("SecurityMQTT lock status query published", { deviceSN });
++          resolve(true);
++        }
++      });
++    });
++  }
++
+   public isConnected(): boolean {
+     return this.connectionState === ConnectionState.CONNECTED;
+   }
+@@ -530,6 +586,41 @@ export class SecurityMQTTService extends TypedEmitter<SecurityMQTTServiceEvents>
+           });
+           this.emit("lock status", deviceSN, heartbeat.locked, heartbeat.battery);
+         }
++      } else if (BleLockProtocol.isStatusResponse(frame)) {
++        const pendingQuery = this.pendingStatusQueries.get(deviceSN);
++        if (!pendingQuery) {
++          rootMQTTLogger.debug("SecurityMQTT received status response without query context", { deviceSN });
++          return;
++        }
++
++        try {
++          const statusData = frame.isEncrypted
++            ? decryptPayloadData(
++                frame.data,
++                generateSmartLockAESKey(pendingQuery.adminUserId, pendingQuery.commandTime),
++                Buffer.from(getLockVectorBytes(deviceSN), "hex")
++              )
++            : frame.data;
++          const status = BleLockProtocol.parseHeartbeat(statusData);
++          if (status) {
++            rootMQTTLogger.info("SecurityMQTT queried lock status", {
++              deviceSN,
++              locked: status.locked,
++              battery: status.battery,
++              rawStatus: status.rawLockStatus,
++            });
++            this.emit("lock status", deviceSN, status.locked, status.battery);
++          } else {
++            rootMQTTLogger.error("SecurityMQTT queried lock status response has no lock state", { deviceSN });
++          }
++        } catch (err) {
++          rootMQTTLogger.error("SecurityMQTT queried lock status decrypt failed", {
++            deviceSN,
++            error: getError(ensureError(err)),
++          });
++        } finally {
++          this.pendingStatusQueries.delete(deviceSN);
++        }
+       } else if (BleLockProtocol.isLockCommandResponse(frame)) {
+         rootMQTTLogger.info("SecurityMQTT received lock command response", {
+           deviceSN: deviceSN,

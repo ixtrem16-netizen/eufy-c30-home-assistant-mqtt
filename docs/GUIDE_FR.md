@@ -221,7 +221,7 @@ aucune ligne `SecurityMQTT` lors d'une commande.
 ```yaml
 name: eufy-security-ws C30 MQTT
 description: eufy-security-ws avec contrôle Security MQTT du C30
-version: 3.1.0-c30.1
+version: 3.1.0-c30.7
 slug: eufy_security_ws_c30
 url: https://github.com/bropat/hassio-eufy-security-ws
 init: false
@@ -284,14 +284,13 @@ SecurityMQTT connecting to security-mqtt-us.anker.com:8883
 SecurityMQTT connected successfully
 SecurityMQTT subscribed: cmd/eufy_security/T85D0/SERIAL/res
 SecurityMQTT subscribed: cmd/eufy_security/T85D0/SERIAL/req
+SecurityMQTT lock status query published
+SecurityMQTT queried lock status
 ```
 
-Les erreurs P2P `get_dsk_keys` avec le code `20028` peuvent encore apparaître
-durant l'initialisation. Elles ne bloquent pas le contrôle MQTT si les lignes
-ci-dessus confirment la connexion et les abonnements Security MQTT.
-
-Une erreur d'abonnement transitoire peut précéder les abonnements réussis. Il
-faut vérifier l'état final, pas uniquement la première erreur.
+Le correctif C30 ne démarre plus le chemin P2P/DSK incompatible et n'inscrit
+plus la serrure sur l'ancien sujet MQTT `smart_lock`. Un démarrage propre ne
+doit donc contenir ni l'erreur `20028`, ni l'erreur d'abonnement legacy.
 
 ## Sujets MQTT utilisés
 
@@ -333,6 +332,11 @@ Pour la C30 testée :
 
 Le heartbeat permet de corriger l'état optimiste et de refléter les mouvements
 effectués depuis l'application Eufy ou physiquement.
+
+À la connexion et lors du rafraîchissement périodique, le module envoie aussi
+la requête de lecture seule `QUERY_STATUS_IN_LOCK` (code BLE `34`). Sa réponse
+chiffrée fournit immédiatement la batterie et l'état réel, sans attendre un
+heartbeat spontané et sans actionner le mécanisme.
 
 ## Procédure de validation obligatoire
 

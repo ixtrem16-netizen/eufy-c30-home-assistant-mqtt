@@ -213,14 +213,13 @@ SecurityMQTT connecting to security-mqtt-us.anker.com:8883
 SecurityMQTT connected successfully
 SecurityMQTT subscribed: cmd/eufy_security/T85D0/SERIAL/res
 SecurityMQTT subscribed: cmd/eufy_security/T85D0/SERIAL/req
+SecurityMQTT lock status query published
+SecurityMQTT queried lock status
 ```
 
-Legacy DSK error `20028` may still occur during startup. It does not block the
-working MQTT channel when SecurityMQTT connects and both exact subscriptions
-succeed.
-
-A transient subscribe error may also appear before the successful
-subscriptions. Evaluate the final connection state, not only the first error.
+The C30 patch no longer starts the incompatible P2P/DSK path and no longer
+registers the lock on the legacy `smart_lock` MQTT topic. A clean startup
+should therefore contain neither error `20028` nor the legacy subscribe error.
 
 ## MQTT topics and messages
 
@@ -255,6 +254,11 @@ For the validated C30:
 
 Heartbeats correct optimistic state and report changes made by the official
 app or at the physical lock.
+
+On connection and periodic refresh, the add-on also sends the read-only
+`QUERY_STATUS_IN_LOCK` request (BLE code `34`). Its encrypted response provides
+the current battery and lock state immediately, without waiting for a
+spontaneous heartbeat and without actuating the mechanism.
 
 ## Mandatory validation procedure
 
